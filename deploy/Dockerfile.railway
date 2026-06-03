@@ -87,3 +87,19 @@ RUN set -eux; \
     rm -rf "$SP/plugins/model-providers/nous" "$SP/plugins/dashboard_auth/nous"; \
     hermes --version; \
     HERMES_HOME=/tmp/hbuildcheck hermes doctor >/dev/null 2>&1 || true
+
+# Per-agent Hermes home wrapper → isolated memory/sessions/auth per Paperclip
+# agent. Works around the bundled adapter (0.2.0) NOT resolving adapterConfig.env
+# (it stringifies {type,value} → HERMES_HOME="[object Object]"). Point each agent's
+# adapterConfig.hermesCommand at this. Derives the agent id from PAPERCLIP_AGENT_ID,
+# falling back to the workspace dir basename (adapter runs hermes from
+# /paperclip/instances/default/workspaces/<agentId>).
+RUN printf '%s\n' \
+  '#!/bin/sh' \
+  'AID="${PAPERCLIP_AGENT_ID:-$(basename "$(pwd)")}"' \
+  'export HERMES_HOME="/paperclip/hermes/$AID"' \
+  'mkdir -p "$HERMES_HOME" 2>/dev/null || true' \
+  'exec /opt/hermes-agent/.venv/bin/hermes "$@"' \
+  > /usr/local/bin/hermes-pc \
+  && chmod 0755 /usr/local/bin/hermes-pc \
+  && head -1 /usr/local/bin/hermes-pc
