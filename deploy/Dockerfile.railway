@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1.7
+# ─────────────────────────────────────────────────────────────────────────────
+# Railway image for the company-OS Paperclip control plane.
+#
+# We layer onto the maintainers' PREBUILT image rather than build from source:
+# upstream's source build currently fails `tsc` (an @types/express-serve-static-core
+# 5.1.x drift breaks the global Express.Request `actor` augmentation, plus a stray
+# route-param type error). The published image is built green by their CI, so we
+# start from it and only add what we need.
+#
+# Adds: the Fabro CLI, so Paperclip's in-container agents (claude-local / codex-local)
+# can invoke deterministic Fabro workflows.
+#
+# Inherits ENTRYPOINT (docker-entrypoint.sh → gosu node) and CMD from the base.
+# Volume writability is handled by the USER_GID=1001 env override on the Railway
+# service, which makes the inherited entrypoint chown the root-owned /paperclip
+# volume to the node user on boot.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM ghcr.io/paperclipai/paperclip:sha-70b1a91
+
+USER root
+
+# ── Fabro CLI (deterministic workflow runtime our agents invoke) ─────────────
+# curl + jq already exist in the base image. Pull the pinned release tarball
+# directly (bypasses install.sh, which needs authenticated gh at build time).
+# Debian trixie = glibc → -gnu target. Bump FABRO_VERSION to upgrade.
+ARG FABRO_VERSION=v0.252.0
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+      x86_64)  T="x86_64-unknown-linux-gnu" ;; \
+      aarch64) T="aarch64-unknown-linux-gnu" ;; \
+      *) echo "unsupported arch $ARCH"; exit 1 ;; \
+    esac; \
+    URL="$(curl -fsSL "https://api.github.com/repos/fabro-sh/fabro/releases/tags/${FABRO_VERSION}" \
+      | jq -r --arg t "fabro-${T}.tar.gz" '.assets[] | select(.name==$t) | .browser_download_url')"; \
+    test -n "$URL" || { echo "fabro asset not found for ${FABRO_VERSION}/${T}"; exit 1; }; \
+    curl -fsSL "$URL" | tar xz -C /tmp; \
+    mv "/tmp/fabro-${T}/fabro" /usr/local/bin/fabro; \
+    chmod 0755 /usr/local/bin/fabro; \
+    fabro --version

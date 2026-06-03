@@ -9,7 +9,9 @@
 
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
+# Thin derived image (prebuilt Paperclip + Fabro). NOT the root Dockerfile, whose
+# from-source server build is broken upstream — see deploy/Dockerfile.railway.
+dockerfilePath = "deploy/Dockerfile.railway"
 
 [deploy]
 # First boot runs DB migrations + plugin load; give it headroom.
