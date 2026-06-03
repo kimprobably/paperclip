@@ -65,3 +65,22 @@ RUN set -eux; \
     mv /tmp/supabase /usr/local/bin/supabase; \
     chmod 0755 /usr/local/bin/supabase; \
     supabase --version
+
+# ── Hermes Agent (for the hermes_local adapter — Bartholomew, Miles, …) ──────
+# Install the whole runtime under /opt so the /paperclip RUNTIME volume can't
+# shadow it (the trap the hermes-studio Dockerfile flagged). uv manages its own
+# Python 3.11 (Hermes pins 3.11; Debian trixie ships 3.13). The published
+# `hermes-agent[all]` wheel gives the `hermes` CLI — verified live on this exact
+# Debian-trixie base. Bump HERMES_VERSION to upgrade.
+ENV HERMES_ACCEPT_HOOKS=1 \
+    UV_PYTHON_INSTALL_DIR=/opt/uvpython
+ARG HERMES_VERSION=0.15.2
+RUN set -eux; \
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh; \
+    apt-get update && apt-get install -y --no-install-recommends build-essential ffmpeg; \
+    rm -rf /var/lib/apt/lists/*; \
+    uv python install 3.11; \
+    uv venv /opt/hermes-agent/.venv --python 3.11; \
+    uv pip install --python /opt/hermes-agent/.venv/bin/python "hermes-agent[all]==${HERMES_VERSION}"; \
+    ln -sf /opt/hermes-agent/.venv/bin/hermes /usr/local/bin/hermes; \
+    hermes --version
