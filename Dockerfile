@@ -41,7 +41,13 @@ COPY packages/plugins/plugin-workspace-diff/package.json packages/plugins/plugin
 COPY patches/ patches/
 COPY scripts/link-plugin-dev-sdk.mjs scripts/
 
-RUN pnpm install --frozen-lockfile
+# cachebust-2: changing this RUN busts Railway's cached deps layer. Also asserts
+# the express-serve-static-core pin (5.0.x) held — 5.1.x silently breaks the
+# global Express.Request `actor` augmentation and fails the server tsc build.
+RUN pnpm install --frozen-lockfile \
+ && echo "== installed express-serve-static-core ==" \
+ && ls -d node_modules/.pnpm/@types+express-serve-static-core@* \
+ && ! ls -d node_modules/.pnpm/@types+express-serve-static-core@5.1* 2>/dev/null
 
 FROM base AS build
 WORKDIR /app
