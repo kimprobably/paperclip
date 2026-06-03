@@ -1,0 +1,20 @@
+{
+  "name": "sge-mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP server wrapping the work-intel Convex queries so any agent can query the SGE corpus.",
+  "main": "sge-mcp-server.ts",
+  "scripts": {
+    "start": "tsx sge-mcp-server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.4.0",
+    "@types/node": "^20.12.0"
+  }
+}
