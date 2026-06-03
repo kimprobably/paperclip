@@ -57,7 +57,14 @@ ARG USER_UID=1000
 ARG USER_GID=1000
 WORKDIR /app
 COPY --chown=node:node --from=build /app /app
-RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai \
+# Pin agent CLIs to today's known-good versions. `@latest` is a footgun: a
+# codex protocol change (0.134.0) silently broke our Hermes JSON-RPC wrapper.
+# Bump these deliberately, never let them drift at build time.
+RUN npm install --global --omit=dev \
+      @anthropic-ai/claude-code@2.1.161 \
+      @openai/codex@0.136.0 \
+      opencode-ai@1.15.13 \
+      convex@1.40.0 \
   && apt-get update \
   && apt-get install -y --no-install-recommends openssh-client jq \
   && rm -rf /var/lib/apt/lists/* \
@@ -66,6 +73,26 @@ RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/cod
 
 COPY scripts/docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# ── Fabro CLI (deterministic workflow runtime our agents call) ────────────────
+# Bypass install.sh (needs authenticated gh at build time); pull the pinned
+# release tarball directly. Debian trixie = glibc, so use the -gnu target.
+# Bump FABRO_VERSION deliberately to upgrade.
+ARG FABRO_VERSION=v0.252.0
+RUN set -eux; \
+    ARCH="$(uname -m)"; \
+    case "$ARCH" in \
+      x86_64)  TARGET="x86_64-unknown-linux-gnu" ;; \
+      aarch64) TARGET="aarch64-unknown-linux-gnu" ;; \
+      *) echo "unsupported arch $ARCH"; exit 1 ;; \
+    esac; \
+    ASSET_URL="$(curl -fsSL "https://api.github.com/repos/fabro-sh/fabro/releases/tags/${FABRO_VERSION}" \
+      | jq -r --arg t "fabro-${TARGET}.tar.gz" '.assets[] | select(.name==$t) | .browser_download_url')"; \
+    test -n "$ASSET_URL" || { echo "fabro asset not found for ${FABRO_VERSION}/${TARGET}"; exit 1; }; \
+    curl -fsSL "$ASSET_URL" | tar xz -C /tmp; \
+    mv "/tmp/fabro-${TARGET}/fabro" /usr/local/bin/fabro; \
+    chmod +x /usr/local/bin/fabro; \
+    fabro --version
 
 ENV NODE_ENV=production \
   HOME=/paperclip \
@@ -81,7 +108,9 @@ ENV NODE_ENV=production \
   PAPERCLIP_DEPLOYMENT_EXPOSURE=private \
   OPENCODE_ALLOW_ALL_MODELS=true
 
-VOLUME ["/paperclip"]
+# NOTE: no `VOLUME ["/paperclip"]` directive — Railway rejects Dockerfile VOLUME
+# and won't mount its managed volume cleanly over it. The persistent volume is
+# attached at /paperclip via Railway service config instead.
 EXPOSE 3100
 
 ENTRYPOINT ["docker-entrypoint.sh"]

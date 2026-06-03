@@ -1,0 +1,19 @@
+# Railway deploy config for the Paperclip control plane.
+# Lives in the `maestro-fabro` project (the company OS), co-located with the
+# Hermes agents + Fabro on the private network. Only this service is public.
+#
+# Required service config NOT expressible here (set in Railway dashboard/API):
+#   - Persistent volume mounted at /paperclip  (config + agent OAuth creds)
+#   - Postgres service `paperclip-db` in the same project/env
+#   - Env vars (see deploy/RAILWAY.md)
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# First boot runs DB migrations + plugin load; give it headroom.
+healthcheckPath = "/api/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
