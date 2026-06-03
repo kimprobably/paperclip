@@ -1,59 +1,81 @@
-# Deploying Paperclip on Railway (the `maestro-fabro` company OS)
+# Paperclip on Railway — the `maestro-fabro` company OS
 
-This fork deploys Paperclip as the **hub** of our agent company OS, in the
-existing Railway project **`maestro-fabro`** (`production` env), co-located with
-the Hermes agents (`maestro-hermes-gateway`, `maestro-hermes-joni`) and Fabro
-(`fabro-maestro`). Internal traffic (Paperclip ↔ Postgres ↔ Hermes ↔ Fabro)
-rides Railway's **free IPv6 private network**; only Paperclip's web UI is public.
+**Live:** https://paperclip-production-9411.up.railway.app (authenticated + public).
+Runs in the Railway project **`maestro-fabro`** / `production`, co-located on the
+free IPv6 private network with the Hermes agents (`maestro-hermes-gateway`,
+`maestro-hermes-joni`) and Fabro (`fabro-maestro`). Only this service is public.
 
-## What this fork changes vs upstream
-- **Pinned agent CLIs** in `Dockerfile` (claude-code, codex, opencode, convex) —
-  no `@latest` drift. Bump deliberately.
-- **Fabro CLI** baked in (`ARG FABRO_VERSION`) so local agents can run
-  deterministic workflows.
-- **Removed `VOLUME ["/paperclip"]`** — Railway rejects Dockerfile VOLUME and
-  won't mount its managed volume over it.
-- Added `railway.toml` (healthcheck `/api/health`, restart policy).
+## Why we deploy a prebuilt image (not source)
 
-## Service config (set in Railway)
-1. **Postgres**: a dedicated `paperclip-db` Postgres service in `maestro-fabro`.
-2. **Volume**: attach a volume to the `paperclip` service, mount path `/paperclip`.
-3. **Resources**: ~2 vCPU / 4 GB (it spawns agent CLIs).
-4. **Public domain**: generate one on the `paperclip` service → that's `PAPERCLIP_API_URL`.
+Building Paperclip from source via the root `Dockerfile` currently **fails** the
+server `tsc` step: the lockfile drifted onto `@types/express-serve-static-core@5.1.x`,
+which stops the global `Express.Request.actor` augmentation from applying (~80
+`req.actor` errors), and HEAD has a stray `req.params.filePath` route-param error.
+Their tagged releases carry the same `@types` drift. So instead we layer onto the
+maintainers' **green prebuilt image**:
 
-## Environment variables
-| Var | Value | Notes |
-|-----|-------|-------|
-| `DATABASE_URL` | `${{paperclip-db.DATABASE_URL}}` | Reference var → private IPv6 host, free |
-| `PAPERCLIP_DEPLOYMENT_MODE` | `authenticated` | login required |
-| `PAPERCLIP_DEPLOYMENT_EXPOSURE` | `public` | internet-facing |
-| `PAPERCLIP_BIND` | `custom` | use explicit bind host below |
-| `PAPERCLIP_BIND_HOST` | `::` | IPv6 all-ifaces: Railway public proxy **and** private-net receive |
-| `HOST` | `::` | legacy override kept consistent with bind host |
-| `PAPERCLIP_API_URL` | `https://<railway-domain>` | satisfies public-mode "explicit URL" check |
-| `PAPERCLIP_PUBLIC_URL` | `https://<railway-domain>` | their compose used this name; harmless to set both |
-| `SERVE_UI` | `true` | serve the React UI from the server |
-| `PAPERCLIP_HOME` | `/paperclip` | = volume mount |
-| `BETTER_AUTH_SECRET` | `openssl rand -base64 32` | ⚠️ **clean, no trailing newline** |
-| `PAPERCLIP_SECRETS_MASTER_KEY` | `openssl rand -base64 32` | ⚠️ clean; encrypts stored agent secrets; set explicitly so it survives redeploys |
-| `PORT` | _unset_ | Railway injects it; app honors it |
-| `PAPERCLIP_AUTH_DISABLE_SIGN_UP` | `true` | **set AFTER first admin signs up**, then redeploy |
+- `deploy/Dockerfile.railway` = `FROM ghcr.io/paperclipai/paperclip:sha-70b1a91`
+  + the **Fabro CLI**. Builds in seconds (no monorepo build). `railway.toml`
+  points `dockerfilePath` here.
+- Upgrade by bumping the `FROM` sha tag (see GHCR for `latest`) and `FABRO_VERSION`.
 
-If keeping the all-LLM-via-OpenRouter standard for API-key adapters, point
-`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` at OpenRouter instead of setting raw
-provider keys. (Subscription-OAuth adapters don't need keys at all.)
+The image already ships `claude` + `codex`; we add `fabro`. All three are on PATH
+in the running container.
 
-## Two human-only gates (browser OAuth — cannot be automated)
-1. **Subscription auth** for the agent CLIs, persisted on the `/paperclip` volume:
+## Service config (already applied)
+
+| Thing | Value |
+|---|---|
+| Service | `paperclip` (`029d8dfb-790b-44b8-8723-680832878eb2`) |
+| Postgres | `Postgres` (`93a1a451-…`), `DATABASE_URL=${{Postgres.DATABASE_URL}}` (private) |
+| Volume | `paperclip-volume` → `/paperclip` |
+| Domain | `paperclip-production-9411.up.railway.app` (port 3100) |
+
+### Volume permission gotcha (important)
+The image entrypoint only `chown`s `/paperclip` to the `node` user **if**
+`USER_UID`/`USER_GID` differ from the baked-in `1000/1000`. On Railway the volume
+mounts as root, so the server boots as `node` and dies with
+`EACCES mkdir /paperclip/instances/default/logs`. **Fix:** set `USER_GID=1001`
+(keep `USER_UID=1000`) on the service → the entrypoint (running as root) chowns the
+volume on boot. Already set.
+
+### Environment variables (already set)
+```
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+PAPERCLIP_DEPLOYMENT_MODE=authenticated
+PAPERCLIP_DEPLOYMENT_EXPOSURE=public
+PAPERCLIP_BIND=custom
+PAPERCLIP_BIND_HOST=::          # IPv6: Railway public proxy + private-net receive
+HOST=::
+PORT=3100
+SERVE_UI=true
+PAPERCLIP_HOME=/paperclip
+PAPERCLIP_API_URL=https://paperclip-production-9411.up.railway.app
+PAPERCLIP_PUBLIC_URL=https://paperclip-production-9411.up.railway.app
+USER_UID=1000
+USER_GID=1001                   # triggers the volume chown
+BETTER_AUTH_SECRET=…            # clean, no trailing newline
+PAPERCLIP_SECRETS_MASTER_KEY=… # clean; encrypts stored agent secrets
+```
+
+## Operator steps that require a browser (only these remain)
+
+1. **First admin:** open the URL → sign up. First signup becomes board admin.
+   Then set `PAPERCLIP_AUTH_DISABLE_SIGN_UP=true` and redeploy; invite the rest in-app.
+2. **Agent CLI subscription auth** — must run **inside** the container so creds land
+   on the `/paperclip` volume. Use `railway ssh` (NOT `railway run`, which is local):
    ```bash
-   railway run --service paperclip codex login          # ChatGPT sub
-   railway run --service paperclip claude setup-token    # Claude sub
+   railway ssh --service paperclip
+   # inside the container:
+   export HOME=/paperclip
+   codex login          # ChatGPT subscription (device flow → approve in browser)
+   claude setup-token   # Claude subscription
+   fabro auth login     # Fabro
    ```
-2. **First admin**: visit `https://<railway-domain>` → sign up. First signup =
-   board admin. Then set `PAPERCLIP_AUTH_DISABLE_SIGN_UP=true`, redeploy, and use
-   the in-app invite flow for everyone else.
+   Alternative: set `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` env vars (point
+   `ANTHROPIC_BASE_URL`/`OPENAI_BASE_URL` at OpenRouter to keep the all-LLM-via-
+   OpenRouter standard).
 
-## Verify
-- `curl -sf https://<railway-domain>/api/health` → 200
-- Logs show `plugin job coordinator started` + `plugin-loader: loadAll complete`
-- `railway run --service paperclip fabro --version` works inside the container
+## Health / verify
+- `curl -sf https://paperclip-production-9411.up.railway.app/api/health` → 200
+- `railway ssh --service paperclip sh -lc 'fabro --version; command -v codex claude'`
