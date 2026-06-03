@@ -83,4 +83,7 @@ RUN set -eux; \
     uv venv /opt/hermes-agent/.venv --python 3.11; \
     uv pip install --python /opt/hermes-agent/.venv/bin/python "hermes-agent[all]==${HERMES_VERSION}"; \
     ln -sf /opt/hermes-agent/.venv/bin/hermes /usr/local/bin/hermes; \
-    hermes --version
+    SP=/opt/hermes-agent/.venv/lib/python3.11/site-packages; \
+    rm -rf "$SP/plugins/model-providers/nous" "$SP/plugins/dashboard_auth/nous"; \
+    hermes --version; \
+    HERMES_HOME=/tmp/hbuildcheck hermes doctor >/dev/null 2>&1 || true
